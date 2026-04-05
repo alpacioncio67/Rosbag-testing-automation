@@ -1,4 +1,50 @@
-# ──────────────────────────────────────────────────────────────
+# ROSBAG AUTOMATION TESTING — Configuration File
+
+# Directory layout
+directories:
+  test_bags : "test_bags"       # Rosbags waiting to be tested
+  failures  : "failures"        # Bags that failed (+ their reports)
+  logs      : "logs"            # Tester log files
+
+# ros2 launch command that starts the simulation node
+# Equivalent to: ros2 launch <package> <launch_file> [extra_args...]
+rosbag_launch:
+  package     : "common_meta"
+  launch_file : "rosbag_simulation_launch.py"
+  extra_args  : []              # e.g. ["use_sim_time:=true"]
+
+# ros2 bag play command
+# Equivalent to: ros2 bag play <bag.mcap> [extra_args...]
+rosbag_play:
+  extra_args  : []              # e.g. ["--rate", "1.0"]
+
+# Testing behaviour
+testing:
+  # Seconds to wait after launching the simulation before starting playback
+  launch_settle_seconds   : 2.0
+
+  # Maximum seconds to wait for a single bag to finish playing.
+  # Set to null for no timeout.
+  play_timeout_seconds    : null
+
+  # Seconds to sleep between cycles when no bags are found
+  empty_dir_wait_seconds  : 10
+
+  # Seconds to sleep per bag during dry-run (no ROS2 environment)
+  dry_run_sleep_seconds   : 1.0
+
+# ── Checkers ────────────────────────────────────────────────────────────────
+# Lista de checkers que se ejecutan durante cada bag.
+# 'type' debe coincidir con una clave del REGISTRY en checkers/__init__.py
+#
+# Para probar el pipeline:
+#   - AlwaysPassChecker  →  nunca falla  (verifica el camino feliz)
+#   - AlwaysFailChecker  →  siempre falla (verifica reporte + move a failures)
+#
+# Comenta/descomenta según lo que quieras probar:
+checkers:
+  - type: AlwaysPassChecker
+  - type: AlwaysFailChecker# ──────────────────────────────────────────────────────────────
 #  ROSBAG AUTOMATION TESTING — Configuration File
 # ──────────────────────────────────────────────────────────────
 
