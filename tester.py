@@ -13,6 +13,7 @@ import subprocess
 import logging
 from datetime import datetime
 from pathlib import Path
+from checkers import build_checkers
 
 import yaml
 
@@ -79,7 +80,7 @@ def get_rosbags(test_bags_dir: Path) -> list[Path]:
     return bags
 
 # Report writer in case of failure
-def write_report(bag_path: Path, failures_dir: Path, reason: str, logger: logging.Logger):
+def write_report(bag_path: Path, failures_dir: Path, failures: list[str], logger: logging.Logger):
     """Write a failure report text file alongside the moved bag."""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     report_name = f"report_{bag_path.stem}_{timestamp}.txt"
@@ -91,10 +92,11 @@ def write_report(bag_path: Path, failures_dir: Path, reason: str, logger: loggin
         "=" * 60,
         f"Timestamp : {datetime.now().isoformat()}",
         f"Bag file  : {bag_path.name}",
-        f"Reason    : {reason}",
+        f"Failures  : {len(failures)}",
         "=" * 60,
     ]
-
+    for i,f in enumerate(failures,1):
+        lines.append(f"  [{i}] {f}")
     report_path.write_text("\n".join(lines) + "\n")
     logger.info(f"Report written → {report_path}")
     return report_path
@@ -112,40 +114,52 @@ def move_to_failures(bag_path: Path, failures_dir: Path, logger: logging.Logger)
     shutil.move(str(bag_path), str(dest))
     logger.warning(f"Bag moved to failures → {dest}")
 
-# Single rosbag simulation
-def run_bag(bag_path: Path, config: dict, logger: logging.Logger) -> bool:
+# Single rosbag execution
+def run_bag(bag_path: Path, config: dict, logger: logging.Logger) -> tuple[bool, list[str]]:
     """
     Simulate testing of a single rosbag.
-
-    Launches two processes:
-      1. ros2 launch  (rosbag_simulation)
-      2. ros2 bag play (the .mcap file)
-
-    Returns True if the bag completed without detected failures,
-    False otherwise.
+ 
+    Returns (True, []) si no hay fallos,
+            (False, [lista de fallos]) si algún checker detecta algo.
     """
-    launch_cfg = config["rosbag_launch"]
-    play_cfg   = config["rosbag_play"]
-    test_cfg   = config["testing"]
-
+    launch_cfg   = config["rosbag_launch"]
+    play_cfg     = config["rosbag_play"]
+    test_cfg     = config["testing"]
+    checker_cfgs = config.get("checkers", [])
+ 
     launch_cmd = [
         "ros2", "launch",
         launch_cfg["package"],
         launch_cfg["launch_file"],
     ] + launch_cfg.get("extra_args", [])
-
+ 
     play_cmd = [
         "ros2", "bag", "play",
         str(bag_path),
     ] + play_cfg.get("extra_args", [])
-
+ 
     logger.info(f"  Launch cmd : {' '.join(launch_cmd)}")
     logger.info(f"  Play cmd   : {' '.join(play_cmd)}")
-
+ 
+    # ── Instanciar checkers ────────────────────────────────────
+    checkers = build_checkers(checker_cfgs, logger)
+    logger.info(f"  Checkers   : {[c.name for c in checkers] or 'none'}")
+ 
     proc_launch = None
     proc_play   = None
-
+ 
+    def collect_failures() -> list[str]:
+        all_failures = []
+        for checker in checkers:
+            checker.stop()
+            all_failures.extend(checker.failures())
+        return all_failures
+ 
     try:
+        # ── Arrancar checkers ──────────────────────────────────
+        for checker in checkers:
+            checker.start()
+ 
         # ── Start simulation node ──────────────────────────────
         proc_launch = subprocess.Popen(
             launch_cmd,
@@ -153,10 +167,9 @@ def run_bag(bag_path: Path, config: dict, logger: logging.Logger) -> bool:
             stderr=subprocess.PIPE,
         )
         logger.debug(f"  Launch PID : {proc_launch.pid}")
-
-        # Small delay to let the launch settle before playing
+ 
         time.sleep(test_cfg.get("launch_settle_seconds", 2.0))
-
+ 
         # ── Start bag playback ─────────────────────────────────
         proc_play = subprocess.Popen(
             play_cmd,
@@ -164,31 +177,28 @@ def run_bag(bag_path: Path, config: dict, logger: logging.Logger) -> bool:
             stderr=subprocess.PIPE,
         )
         logger.debug(f"  Play PID   : {proc_play.pid}")
-
+ 
         # ── Wait for playback to finish ────────────────────────
         timeout = test_cfg.get("play_timeout_seconds", None)
         proc_play.wait(timeout=timeout)
         logger.debug(f"  Play finished with returncode={proc_play.returncode}")
-
-        # ── [FUTURE] Monitoring hooks will run here ────────────
-        #    Checker nodes will be started before play and
-        #    joined here to inspect their results.
-
-        failure_detected = False  # No monitoring yet → never fails
-        return not failure_detected
-
+ 
+        failures = collect_failures()
+        return (len(failures) == 0, failures)
+ 
     except subprocess.TimeoutExpired:
         logger.error("  Playback exceeded timeout — treating as failure.")
-        return False
-
+        failures = collect_failures()
+        failures.insert(0, "Playback exceeded configured timeout.")
+        return (False, failures)
+ 
     except FileNotFoundError as exc:
-        # ros2 binary not found (e.g. running outside ROS environment)
         logger.warning(f"  ROS2 binary not found ({exc}). Simulating dry-run.")
         time.sleep(test_cfg.get("dry_run_sleep_seconds", 1.0))
-        return True  # Dry-run always succeeds
-
+        failures = collect_failures()
+        return (len(failures) == 0, failures)
+ 
     finally:
-        # Always clean up both processes
         for proc, name in [(proc_play, "play"), (proc_launch, "launch")]:
             if proc and proc.poll() is None:
                 logger.debug(f"  Terminating {name} process (PID {proc.pid})")
@@ -224,7 +234,7 @@ def main_loop(config: dict, dirs: dict, logger: logging.Logger):
             for bag_path in bags:
                 logger.info(f"  ▶ Processing: {bag_path.name}")
 
-                success = run_bag(bag_path, config, logger)
+                success, failures = run_bag(bag_path, config, logger)
 
                 if success:
                     logger.info(f"  ✔ PASSED — {bag_path.name}")
@@ -233,7 +243,7 @@ def main_loop(config: dict, dirs: dict, logger: logging.Logger):
                     write_report(
                         bag_path=bag_path,
                         failures_dir=failures_dir,
-                        reason="Failure detected during monitoring.",
+                        failures=failures,
                         logger=logger,
                     )
                     move_to_failures(bag_path, failures_dir, logger)
