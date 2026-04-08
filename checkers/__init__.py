@@ -9,15 +9,19 @@ Añadir un checker nuevo:
   2. Añadir una línea aquí:  "MiChecker": MiChecker
 """
 
-from .base_checker         import BaseChecker
-from .always_pass_checker  import AlwaysPassChecker
-from .always_fail_checker  import AlwaysFailChecker
+from .base_checker          import BaseChecker
+from .always_pass_checker   import AlwaysPassChecker
+from .always_fail_checker   import AlwaysFailChecker
+from .topic_alive_checker        import TopicAliveChecker
+from .slam_jump_checker  import PositionReceivedChecker
 
 # ── Registry nombre → clase ────────────────────────────────────────────────
 # El tester usa este dict para instanciar checkers desde config.yaml
 REGISTRY: dict[str, type[BaseChecker]] = {
     "AlwaysPassChecker" : AlwaysPassChecker,
     "AlwaysFailChecker" : AlwaysFailChecker,
+    "TopicAliveChecker"        : TopicAliveChecker,
+    "PositionReceivedChecker"  : PositionReceivedChecker,
 }
 
 
