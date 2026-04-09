@@ -1,98 +1,117 @@
-# ROSBAG AUTOMATION TESTING
+# ROSBAG Automation Testing
 
-To improve our testing process, I am going to develop an automated rosbag testing system. The system will be developed in Python.
-
-The philosophy I will follow to develop this system is "divide and conquer." I am going to break down everything we want to tackle into subproblems so they can be addressed one by one. Additionally, I will create a GitHub repository to deploy this with a simple `git clone`. The documentation approach will be more oriented towards the problems I encounter as I tackle each part of the system individually.
-
-Another thing to note is that I will try to modularize the system as much as possible to make it easier to implement modifications or extensions in the future.
-
-## Table of Contents
-
-1. General System Overview
-2. Detailed Implementation
+The goal of this system is to automate the testing of rosbags. The philosophy behind its development is **divide and conquer**: breaking the problem into subproblems and addressing them one by one. The system is designed to be as modular as possible to make future modifications and expansions straightforward.
 
 ---
 
-## 1. OVERVIEW
+## Table of Contents
 
-The system consists of:
+1. [General System Overview](#1-general-system-overview)
+2. [Detailed Implementation](#2-detailed-implementation)
+   - [2.1 Base Program and Structure](#21-base-program-and-structure)
+   - [2.2.1 Monitoring](#221-monitoring)
+   - [2.2.2 Specific Checkers](#222-specific-checkers)
 
-* A Python script
-* A configuration file
-* A rosbags directory
-* A failures directory
+---
 
-The script will load the configuration file, check the directory structure, and process all the rosbags in the `test_bags` folder in an infinite loop. The bags will be executed sequentially. To achieve this, the program simulates the individual testing of a rosbag using:
+## 1. General System Overview
 
-* One terminal running: `rosbag launch common_meta rosbag_simulation.py`
-* Another terminal running: `rosbag play rosbag.mcap`
+The system consists of four components:
 
-During the execution of each rosbag, the program will actively monitor for specific failures. We will accomplish this using classes acting as ROS nodes that will subscribe to certain nodes and perform checks (more detail in section 2).
+- **Python script**
+- **Configuration file**
+- **Directory with rosbags** (`test_bags/`)
+- **Failures directory**
 
-The goal is that if the program detects a failure, it generates a failure report, removes the rosbag from the testing folder, and uploads it to Foxglove. However, I have created a local "failures" directory because, during the early stages of development, the script will simply generate the report and move the failed rosbag to this folder. Later, once everything runs smoothly locally, I will implement the Foxglove upload functionality.
+The script loads the configuration file, checks the directory structure, and processes all rosbags in `test_bags/` in an infinite loop, executing them sequentially. Each rosbag is tested by simulating the manual workflow:
+
+1. **Terminal 1:** `ros2 launch common_meta rosbag_simulation.py`
+2. **Terminal 2:** `ros2 bag play rosbag.mcap`
+
+During execution, the program monitors for specific failures using checker classes that act as ROS2 nodes subscribed to relevant topics. If a failure is detected, the program generates a report and moves the rosbag to the failures folder. In a future phase, it will also upload the rosbag to Foxglove.
 
 ---
 
 ## 2. Detailed Implementation
 
-The implementation will consist of 3 main phases:
+The implementation uses **rclpy** (ROS Client Library for Python), a Python wrapper over the `rcl` C library that allows the script to participate in the ROS2 ecosystem.
 
-* **Base program and structure:** Making our program capable of automating rosbag executions infinitely.
-* **Monitoring:** Tracking ROS nodes and topics to run checks, and moving the rosbag in case of a failure.
-* **Foxglove Integration:** Adding the functionality to upload a rosbag to Foxglove in case of a failure.
+The development is structured in three major phases:
+
+1. **Base program and structure** — Automating rosbag executions in an infinite loop.
+2. **Monitoring ROS nodes and topics** — Checking conditions and handling failures.
+3. **Foxglove integration** — Uploading failing rosbags to Foxglove *(future phase)*.
+
+---
 
 ### 2.1 Base Program and Structure
 
-The first thing we want to build is a Python program that mimics the manual simulation of rosbags, without running any checks initially.
+The first goal is a Python program that imitates the manual rosbag simulation, without any checks.
 
-* **Logging Setup:** The first step is to configure logging. This is basically a Python library that allows us to output execution messages for our program, rather than purely using `print` statements. It features levels and message types that will help us better monitor what is happening inside our program.
+#### Logging
 
-* **Configuration File:** The script loads the configuration file to avoid hardcoding values and touching the source code in the future. It includes:
-  * Directory paths
-  * Launch command (`rosbag launch common_meta rosbag_simulation_launch.py`)
-  * Rosbag play command
-  * Testing parameters: Wait time (in seconds) between launch and play, maximum time per bag, wait time before re-checking the directory, etc.
+The standard Python `logging` library is used instead of `print` statements. It provides message levels and types that give clear visibility into what the program is doing at each step.
 
-Once the configuration is loaded, and making use of the `os` library, the script verifies the directory structure and looks for rosbags inside the `test_bags` directory. The function responsible for moving a rosbag in case of a failure is also defined here (eventually, once the script is well-defined, this function will handle the Foxglove upload).
+#### Configuration File
 
-* **`run_bag` Function:** Once the script selects a rosbag to test, this function takes over. Using a dictionary (`config`), it executes the corresponding ROS commands to simulate the individual testing of that rosbag. This function will return a boolean: it will return `True` if the bag finishes without any failures (keeping in mind we aren't monitoring anything yet), and `False` otherwise.
+The script loads a YAML configuration file to avoid hardcoding values. It covers:
 
-* **`main_loop` Function:** Finally, we have the `main_loop` function, which creates the infinite loop that constantly checks the `test_bags` directory. This function is called from `main`, which acts as the entry point of the program.
+- Directories
+- Launch command (`ros2 launch common_meta rosbag_simulation_launch.py`)
+- Rosbag play command
+- Testing parameters: seconds to wait between launch and play, maximum time per bag, directory poll interval, etc.
 
-**Main Execution Flow:**
-1. Load configuration.
-2. Ensure directories exist.
-3. Execute the main loop.
+#### Directory Setup
+
+Using the `os` library, the script validates the directory structure and scans `test_bags/` for rosbags. A helper function to move a failing rosbag is also defined here (this will later become a Foxglove upload call).
+
+#### `run_bag` Function
+
+Handles the execution of a single rosbag. Using the loaded config dictionary, it runs the corresponding ROS2 commands to simulate the test. Returns `True` if the bag completes without failure, `False` otherwise.
+
+#### Main Loop
+
+`main_loop` runs the infinite loop that continuously polls `test_bags/`. It is called from `main`, the program's entry point.
+
+**Main flow:**
+
+```
+1. Load configuration
+2. Ensure directories exist
+3. Execute the main loop
+```
+
+---
 
 ### 2.2.1 Monitoring
 
-Now that we have the testing simulation in place, we need to get our Python script to perform checks until it finds what we consider a failure. Specifically, we want to implement checks to:
+With the simulation running, the next step is implementing checks to detect failures.
 
-* Ensure nodes do not die.
-* Ensure the SLAM does not jump/bounce around.
+#### Concepts
 
-**Nodes:**
-A node is simply a process that participates in the ROS2 graph. It can publish, subscribe, offer services, etc. In our case, the tester needs to be a node itself to be able to "listen" to what happens during playback.
+- **Node:** A process that participates in the ROS2 graph. It can publish, subscribe, offer services, etc. The tester itself must be a node to listen to what happens during playback.
+- **Topic:** The communication channel. When a bag is played, it republishes messages to the same topics it recorded.
+- **Callback:** A function registered on a subscription that executes automatically each time a new message arrives — this is where checks are performed.
 
-**Topics:**
-This is the communication channel. When a bag is played back, it publishes messages to the same topics it recorded. 
+#### The Threading Problem
 
-A node (in this case, our program) subscribes to a topic and registers a *callback*, which is a function that executes automatically every time a new message arrives (this is where we will perform the checks).
+ROS2 requires a `spin` loop to process callbacks — a blocking call that continuously listens on the network. Since the program already has its own blocking main loop, the ROS2 spin must run in a **separate thread**.
 
-* **The Threading Problem:**
-ROS2 requires a `spin` to process callbacks (a blocking loop that continuously listens to the network). Because of this, we must run the ROS2 spin in a separate thread, since our program already has its own blocking main loop (which is infinite).
+---
 
-* **Checkers Architecture:**
-Each monitor will be a class that inherits from `BaseChecker`, a class that defines the contract all checkers must fulfill.
+#### Checker Architecture
 
-```text
+Each monitor is a class inheriting from `BaseChecker`, which defines the contract all checkers must fulfill:
+
+```
 BaseChecker
-├── start()        → subscribe to topic, start spin thread
-├── stop()         → unsubscribe, stop thread
-└── failures()     → return list of strings with detected failures
+├── start()     → subscribe to the topic, start spin thread
+├── stop()      → unsubscribe, stop thread
+└── failures()  → return a list of strings with detected failures
 ```
 
-Each specific checker only has to implement its checking logic in the callback:
+Each specific checker only implements its own logic in the callback:
+
 ```
 BaseChecker
     │
@@ -101,13 +120,17 @@ BaseChecker
     ├── ValueRangeChecker    ← Is a message field out of range?
     └── StampChecker         ← Do timestamps go backwards or jump?
 ```
-Integration into run_bag:
 
-The complete flow of our run_bag function with monitoring added would look like this:
+The key design principle is that **each checker is completely independent** — it knows nothing about the rest of the system, simply listening to its topic and accumulating detected issues. This makes it easy to add new checker types without modifying existing code.
 
+---
+
+#### Integration into `run_bag`
+
+```
 run_bag()
 │
-├── 1. Instantiate checkers based on config
+├── 1. Instantiate checkers from config
 │       checkers = [FrequencyChecker("/scan", min_hz=9.0),
 │                   TimeoutChecker("/odom", max_gap_sec=1.0)]
 │
@@ -117,8 +140,8 @@ run_bag()
 ├── 3. Launch proc_launch  (ros2 launch ...)
 ├── 4. Launch proc_play    (ros2 bag play ...)
 │
-├── 5. proc_play.wait()    ← blocking until the bag finishes
-│       meanwhile, callbacks run in their separate threads
+├── 5. proc_play.wait()    ← blocks until the bag finishes
+│       meanwhile, callbacks run in their threads
 │
 ├── 6. checker.stop() for each one
 │
@@ -128,10 +151,15 @@ run_bag()
             all_failures += checker.failures()
 
         return len(all_failures) == 0
-
-Checker Configuration in config.yaml:
-Instead of hardcoding the checkers into the code, they are defined in the config file.
 ```
+
+---
+
+#### Checker Configuration (`config.yaml`)
+
+Checkers are defined in the config file rather than hardcoded:
+
+```yaml
 checkers:
   - type: FrequencyChecker
     topic: /scan
@@ -148,37 +176,113 @@ checkers:
     min: 0
     max: 1
 ```
-The script reads the list and dynamically instantiates each class with its parameters, adding them to a list of checkers.
 
-The key to this design is that each checker is completely independent; it knows nothing about the rest of the system. It simply listens to its topic and accumulates whatever it finds to be wrong. This makes it incredibly easy to add new types of configurations without touching the existing code. We just need to modify the config.yaml to specify which checkers we want to use.
+The script reads this list and dynamically instantiates each class with its parameters.
 
-    Basic Implementation:
-    To verify and validate that this system works, we will create the BaseChecker and its derived classes in a separate folder to keep everything modular and structured. Then, we will create one checker that always returns True and another that always returns False, to test the logic I just developed.
+---
 
-I recommend taking a look at the base_checker class to understand the structure behind it, and to easily see how each inherited class only has to implement its specific logic.
+#### Basic Implementation & Validation
 
-We must make several changes to run_bag, main, and write_report. To handle the failure logic, we will store a list of failures that we will process to create the report. If this list is empty, the test is considered valid and the bag remains where it is.
+To verify the architecture, two test checkers are provided:
 
-System Validation up to this point:
+- `AlwaysPassChecker` — always returns no failures.
+- `AlwaysFailChecker` — always returns a failure.
 
-To verify that the system is on the right track, I am going to run a test with several rosbags. For this purpose, and available in the repository, I will be using two dummy checkers: one that always passes and another that always fails.
+Running a batch of rosbags with these two checkers confirms that reports are generated correctly and that failing bags are moved to the failures folder as expected.
 
-By doing this, we can verify that the corresponding reports are created and the bags are successfully moved to the failures folder (later, this would trigger an upload to Foxglove).
+---
 
-2.2.2 Specific Checkers
+### 2.2.2 Specific Checkers
 
-Now that we have the foundations of the system solidly in place, we must build the unique logic for each specific checker we want to create.
+With the foundation in place, the actual checker logic can be implemented for the two main failure conditions:
 
-   - Check that the nodes we want to monitor are alive.
+1. **Check that key nodes are alive**
+2. **Check that SLAM does not jump**
 
-   - Check that the SLAM doesn't jump.
+---
 
-   - check_nodos_vivos (Check Live Nodes):
-   - 
-    To verify if the nodes are alive, we will subscribe to the corresponding topics and check if we are receiving messages when we are supposed to. The topics we are going to monitor are:
+#### 1. SLAM Jump Checker (`slam_jump_checker.py`)
 
-        /perception/map2
+**Primary objective:** Guarantee the positional stability of the SLAM system by detecting anomalies, bounces, or abrupt teleportations between consecutive estimates.
 
-        /slam/map2
+**Implementation logic:**
 
-        /path_planning/trajectory2
+1. Subscribes to the target topic (default: `/car_state/state2`) and intercepts each message.
+2. Includes a safety barrier (`hasattr`) to ignore malformed messages without spatial coordinates.
+3. Stores the coordinates of the previous message in internal state; the first message is skipped (no prior reference).
+4. Calculates the Euclidean distance between the current and previous position using the Pythagorean theorem.
+5. If the displacement exceeds `max_jump`, logs a failure with the coordinates and jump magnitude.
+
+**Configuration example:**
+
+```yaml
+checkers:
+  - type: PositionReceivedChecker
+    topic: /car_state/state2
+    max_jump: 1.0  # Maximum allowed displacement in meters between consecutive messages
+```
+
+---
+
+#### 2. Topic Alive Checker (`topic_alive_checker.py`)
+
+**Primary objective:** Act as a watchdog verifying the continuous vitality of a node or topic, ensuring messages flow at the expected frequency throughout the entire bag execution.
+
+**Implementation logic:**
+
+1. Delegates subscription and topic discovery to a background thread, preventing blockages during system initialization.
+2. Implements a native ROS2 Timer linked to the executor, triggering at twice the allowed timeout frequency to avoid false positives.
+3. On every message received, updates an absolute system timestamp.
+4. The timer periodically checks the elapsed time since the last message. If it exceeds the configured threshold, a flow drop is declared, the failure is logged, and the recurring alert is cancelled to keep logs clean.
+
+**Configuration example:**
+
+```yaml
+checkers:
+  - type: TopicAliveChecker
+    topic: /perception/map2
+    seconds: 2  # Maximum seconds allowed without receiving a message
+  - type: TopicAliveChecker
+    topic: /path_planning/trajectory2
+    seconds: 5
+```
+
+---
+
+#### Checker Startup Internals
+
+**Phase 1 — Isolated context:**
+
+```python
+self._context = rclpy.context.Context()
+rclpy.init(context=self._context)
+```
+
+Each checker creates its own `rclpy` context instead of using the global one. This is critical: it prevents the global context from being invalidated when a bag finishes and its checkers are torn down.
+
+**Phase 2 — Background topic discovery:**
+
+```
+loop every 0.2s for up to 30s
+│
+├── node.get_topic_names_and_types()
+│       returns all active topics in the ROS2 graph
+│       e.g. {"/perception/map2": ["nav_msgs/msg/OccupancyGrid"], ...}
+│
+├── Is our topic present?
+│       NO  → wait 0.2s and retry
+│       YES → extract type: "nav_msgs/msg/OccupancyGrid"
+│               │
+│               └── _load_msg_class()
+│                       split by "/" → pkg="nav_msgs", cls="OccupancyGrid"
+│                       importlib.import_module("nav_msgs.msg")
+│                       getattr(module, "OccupancyGrid")
+│                       returns the real Python class
+│
+└── create_subscription(msg_cls, topic, _callback, 10)
+        executor now delivers messages to _callback
+```
+
+**Phase 3 — Message reception (`_callback`):**
+
+The callback receives each message and applies the checker-specific logic. For the alive checker, it verifies that messages arrive within the configured time window by comparing timestamps between consecutive messages.
