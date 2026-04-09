@@ -118,7 +118,6 @@ class PositionReceivedChecker(BaseChecker):
             self._executor.spin()
         except Exception:
             pass 
-# ── Callback ──────────────────────────────────────────────────────────
 
     # ── Callback ──────────────────────────────────────────────────────────
 
