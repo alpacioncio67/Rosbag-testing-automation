@@ -13,10 +13,15 @@ import subprocess
 import logging
 from datetime import datetime
 from pathlib import Path
-from checkers import build_checkers
 
 import yaml
 
+from checkers import build_checkers
+
+
+# ──────────────────────────────────────────────
+#  Logging setup
+# ──────────────────────────────────────────────
 def setup_logging(log_dir: Path) -> logging.Logger:
     log_dir.mkdir(parents=True, exist_ok=True)
     log_file = log_dir / f"tester_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
@@ -43,7 +48,10 @@ def setup_logging(log_dir: Path) -> logging.Logger:
     logger.addHandler(fh)
     return logger
 
-# Loading configuration
+
+# ──────────────────────────────────────────────
+#  Config loader
+# ──────────────────────────────────────────────
 def load_config(config_path: str) -> dict:
     """Load and validate the YAML configuration file."""
     path = Path(config_path)
@@ -60,7 +68,10 @@ def load_config(config_path: str) -> dict:
 
     return config
 
-# Checking directories
+
+# ──────────────────────────────────────────────
+#  Directory structure check
+# ──────────────────────────────────────────────
 def ensure_directories(config: dict, logger: logging.Logger) -> dict:
     """Ensure all required directories exist, create them if missing."""
     dirs = {}
@@ -73,35 +84,52 @@ def ensure_directories(config: dict, logger: logging.Logger) -> dict:
     logger.info("Directory structure verified.")
     return dirs
 
-# Obtaining rosbags from the rosbag directiry
+
+# ──────────────────────────────────────────────
+#  Rosbag discovery
+# ──────────────────────────────────────────────
 def get_rosbags(test_bags_dir: Path) -> list[Path]:
     """Return a sorted list of .mcap files in the test_bags directory."""
     bags = sorted(test_bags_dir.glob("*.mcap"))
     return bags
 
-# Report writer in case of failure
-def write_report(bag_path: Path, failures_dir: Path, failures: list[str], logger: logging.Logger):
-    """Write a failure report text file alongside the moved bag."""
+
+# ──────────────────────────────────────────────
+#  Report writer
+# ──────────────────────────────────────────────
+def write_report(bag_path: Path, failures_dir: Path, failures: list[dict], logger: logging.Logger):
+    """
+    Escribe el reporte de fallos.
+    Nombre: report_<bag>_<fecha>_<hora>_at_<primer_elapsed>s.txt
+    failures: lista de dicts {"reason": str, "elapsed": float}
+    """
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    report_name = f"report_{bag_path.stem}_{timestamp}.txt"
+    first_elapsed = int(failures[0]["elapsed"]) if failures else 0
+    report_name = f"report_{bag_path.stem}_{timestamp}_at_{first_elapsed}s.txt"
     report_path = failures_dir / report_name
 
     lines = [
         "=" * 60,
         "ROSBAG AUTOMATION TESTING — FAILURE REPORT",
         "=" * 60,
-        f"Timestamp : {datetime.now().isoformat()}",
-        f"Bag file  : {bag_path.name}",
-        f"Failures  : {len(failures)}",
-        "=" * 60,
+        f"Timestamp  : {datetime.now().isoformat()}",
+        f"Bag file   : {bag_path.name}",
+        f"Failures   : {len(failures)}",
+        "-" * 60,
     ]
-    for i,f in enumerate(failures,1):
-        lines.append(f"  [{i}] {f}")
+    for i, f in enumerate(failures, 1):
+        elapsed_str = f"{f['elapsed']:.1f}s"
+        lines.append(f"  [{i}] @ {elapsed_str} — {f['reason']}")
+    lines.append("=" * 60)
+
     report_path.write_text("\n".join(lines) + "\n")
     logger.info(f"Report written → {report_path}")
     return report_path
 
-# Moving rosbag to failure
+
+# ──────────────────────────────────────────────
+#  Move bag to failures
+# ──────────────────────────────────────────────
 def move_to_failures(bag_path: Path, failures_dir: Path, logger: logging.Logger):
     dest = failures_dir / bag_path.name
     # Avoid overwriting if a bag with the same name already failed before
@@ -114,11 +142,14 @@ def move_to_failures(bag_path: Path, failures_dir: Path, logger: logging.Logger)
     shutil.move(str(bag_path), str(dest))
     logger.warning(f"Bag moved to failures → {dest}")
 
-# Single rosbag execution
+
+# ──────────────────────────────────────────────
+#  Single bag simulation
+# ──────────────────────────────────────────────
 def run_bag(bag_path: Path, config: dict, logger: logging.Logger) -> tuple[bool, list[str]]:
     """
     Simulate testing of a single rosbag.
- 
+
     Returns (True, []) si no hay fallos,
             (False, [lista de fallos]) si algún checker detecta algo.
     """
@@ -126,40 +157,36 @@ def run_bag(bag_path: Path, config: dict, logger: logging.Logger) -> tuple[bool,
     play_cfg     = config["rosbag_play"]
     test_cfg     = config["testing"]
     checker_cfgs = config.get("checkers", [])
- 
+
     launch_cmd = [
         "ros2", "launch",
         launch_cfg["package"],
         launch_cfg["launch_file"],
     ] + launch_cfg.get("extra_args", [])
- 
+
     play_cmd = [
         "ros2", "bag", "play",
         str(bag_path),
     ] + play_cfg.get("extra_args", [])
- 
+
     logger.info(f"  Launch cmd : {' '.join(launch_cmd)}")
     logger.info(f"  Play cmd   : {' '.join(play_cmd)}")
- 
+
     # ── Instanciar checkers ────────────────────────────────────
     checkers = build_checkers(checker_cfgs, logger)
     logger.info(f"  Checkers   : {[c.name for c in checkers] or 'none'}")
- 
+
     proc_launch = None
     proc_play   = None
- 
+
     def collect_failures() -> list[str]:
         all_failures = []
         for checker in checkers:
             checker.stop()
             all_failures.extend(checker.failures())
         return all_failures
- 
+
     try:
-        # ── Arrancar checkers ──────────────────────────────────
-        for checker in checkers:
-            checker.start()
- 
         # ── Start simulation node ──────────────────────────────
         proc_launch = subprocess.Popen(
             launch_cmd,
@@ -167,9 +194,9 @@ def run_bag(bag_path: Path, config: dict, logger: logging.Logger) -> tuple[bool,
             stderr=subprocess.PIPE,
         )
         logger.debug(f"  Launch PID : {proc_launch.pid}")
- 
+
         time.sleep(test_cfg.get("launch_settle_seconds", 2.0))
- 
+
         # ── Start bag playback ─────────────────────────────────
         proc_play = subprocess.Popen(
             play_cmd,
@@ -177,27 +204,33 @@ def run_bag(bag_path: Path, config: dict, logger: logging.Logger) -> tuple[bool,
             stderr=subprocess.PIPE,
         )
         logger.debug(f"  Play PID   : {proc_play.pid}")
- 
+
+        # ── Arrancar checkers DESPUÉS del play ─────────────────
+        # Los topics ya están publicándose en el grafo ROS2
+        # en este punto, así que el discovery funciona correctamente
+        for checker in checkers:
+            checker.start()
+
         # ── Wait for playback to finish ────────────────────────
         timeout = test_cfg.get("play_timeout_seconds", None)
         proc_play.wait(timeout=timeout)
         logger.debug(f"  Play finished with returncode={proc_play.returncode}")
- 
+
         failures = collect_failures()
         return (len(failures) == 0, failures)
- 
+
     except subprocess.TimeoutExpired:
         logger.error("  Playback exceeded timeout — treating as failure.")
         failures = collect_failures()
         failures.insert(0, "Playback exceeded configured timeout.")
         return (False, failures)
- 
+
     except FileNotFoundError as exc:
         logger.warning(f"  ROS2 binary not found ({exc}). Simulating dry-run.")
         time.sleep(test_cfg.get("dry_run_sleep_seconds", 1.0))
         failures = collect_failures()
         return (len(failures) == 0, failures)
- 
+
     finally:
         for proc, name in [(proc_play, "play"), (proc_launch, "launch")]:
             if proc and proc.poll() is None:
@@ -208,7 +241,10 @@ def run_bag(bag_path: Path, config: dict, logger: logging.Logger) -> tuple[bool,
                 except subprocess.TimeoutExpired:
                     proc.kill()
 
-# Infinite loop
+
+# ──────────────────────────────────────────────
+#  Main loop
+# ──────────────────────────────────────────────
 def main_loop(config: dict, dirs: dict, logger: logging.Logger):
     test_bags_dir = dirs["test_bags"]
     failures_dir  = dirs["failures"]
@@ -253,7 +289,10 @@ def main_loop(config: dict, dirs: dict, logger: logging.Logger):
     except KeyboardInterrupt:
         logger.info("Interrupted by user. Shutting down.")
 
-# main
+
+# ──────────────────────────────────────────────
+#  Entry point
+# ──────────────────────────────────────────────
 if __name__ == "__main__":
     import argparse
 
