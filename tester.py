@@ -94,17 +94,18 @@ def get_rosbags(test_bags_dir: Path) -> list[Path]:
     return bags
 
 
-# ──────────────────────────────────────────────
-#  Report writer
-# ──────────────────────────────────────────────
-def write_report(bag_path: Path, failures_dir: Path, failures: list[dict], logger: logging.Logger):
-    """
-    Escribe el reporte de fallos.
-    Nombre: report_<bag>_<fecha>_<hora>_at_<primer_elapsed>s.txt
-    failures: lista de dicts {"reason": str, "elapsed": float}
-    """
+def write_report(bag_path: Path, failures_dir: Path, failures: list, logger: logging.Logger):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    first_elapsed = int(failures[0]["elapsed"]) if failures else 0
+
+    # Normalizar — acepta tanto dicts {"reason":..., "elapsed":...} como strings
+    normalized = []
+    for f in failures:
+        if isinstance(f, dict):
+            normalized.append(f)
+        else:
+            normalized.append({"reason": str(f), "elapsed": 0.0})
+
+    first_elapsed = int(normalized[0]["elapsed"]) if normalized else 0
     report_name = f"report_{bag_path.stem}_{timestamp}_at_{first_elapsed}s.txt"
     report_path = failures_dir / report_name
 
@@ -114,10 +115,10 @@ def write_report(bag_path: Path, failures_dir: Path, failures: list[dict], logge
         "=" * 60,
         f"Timestamp  : {datetime.now().isoformat()}",
         f"Bag file   : {bag_path.name}",
-        f"Failures   : {len(failures)}",
+        f"Failures   : {len(normalized)}",
         "-" * 60,
     ]
-    for i, f in enumerate(failures, 1):
+    for i, f in enumerate(normalized, 1):
         elapsed_str = f"{f['elapsed']:.1f}s"
         lines.append(f"  [{i}] @ {elapsed_str} — {f['reason']}")
     lines.append("=" * 60)
@@ -125,7 +126,6 @@ def write_report(bag_path: Path, failures_dir: Path, failures: list[dict], logge
     report_path.write_text("\n".join(lines) + "\n")
     logger.info(f"Report written → {report_path}")
     return report_path
-
 
 # ──────────────────────────────────────────────
 #  Move bag to failures
