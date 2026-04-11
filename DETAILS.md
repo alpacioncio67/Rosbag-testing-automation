@@ -286,3 +286,65 @@ loop every 0.2s for up to 30s
 **Phase 3 — Message reception (`_callback`):**
 
 The callback receives each message and applies the checker-specific logic. For the alive checker, it verifies that messages arrive within the configured time window by comparing timestamps between consecutive messages.
+
+### 2.3 Uploading Data to Foxglove
+
+#### Overview
+
+Instead of uploading the original rosbags directly to Foxglove, we will record them on top of our pipeline using `ros2 bag record`. Only the recorded bag — which captures everything happening during the simulation — will be uploaded to Foxglove.
+
+This feature is being implemented first using the `failures` folder, as we have been doing so far.
+
+---
+
+#### New Execution Thread
+
+We are adding a fourth thread to the main program. The current thread structure looks like this:
+
+| Thread | Command |
+|--------|---------|
+| 1 | `ros2 bag play` |
+| 2 | `ros2 launch common_meta rosbag_simulation_launch.py` |
+| 3+ | Extra threads for each checker |
+
+We are adding a new one:
+
+| Thread | Command |
+|--------|---------|
+| **NEW** | **`ros2 bag record`** |
+
+---
+
+#### Execution Flow
+
+```
+ros2 launch      →  starts the simulation
+sleep 2s
+ros2 bag play    →  replays the original bag
+ros2 bag record  →  records everything happening in parallel
+checkers         →  monitor in parallel
+
+bag play finishes
+        │
+        ├── SIGINT → record          ← stops the recording cleanly
+        ├── stop() → checkers
+        │
+        ├── PASS → shutil.rmtree(/tmp/rosbag_record_...)   ← recording is deleted
+        └── FAIL → shutil.move  →  failures/recordings/recorded_<bag>_<timestamp>/
+```
+
+> **Key rule:** the recorded rosbag is only kept if the run **fails**. On a passing run it is discarded immediately to avoid wasting disk space.
+
+---
+
+#### `failures/` Directory Structure
+
+After this feature is implemented, the `failures/` directory will be organised as follows:
+
+```
+/failures
+    /metadata        ← checker output metadata for failed runs
+    /recordings      ← recorded rosbags for failed runs
+    /reports         ← generated reports for failed runs
+    <original_bags>  ← original rosbag files that failed
+```
