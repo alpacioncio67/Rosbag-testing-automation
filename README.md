@@ -41,6 +41,7 @@ rosbag_automation/
 - **Python dependencies:**
   ```bash
   pip install pyyaml
+  pip install python-dotenv requests
   ```
   The remaining dependencies (`rclpy`, `rclpy.executors`, etc.) are bundled with ROS2.
 
