@@ -4,15 +4,18 @@
 
 # Directory layout
 directories:
-  test_bags : "test_bags"       # Rosbags waiting to be tested
-  failures  : "failures"        # Bags that failed (+ their reports)
-  logs      : "logs"            # Tester log files
+  test_bags  : "test_bags"              # Rosbags pendientes de testear
+  failures   : "failures"              # Bags originales que fallaron
+  reports    : "failures/reports"      # Reportes .txt de cada fallo
+  recordings : "failures/recordings"   # .mcap grabados con ros2 bag record
+  metadata   : "failures/metadata"     # metadata.yaml de cada grabación
+  logs       : "logs"                  # Logs del tester
 
 # ros2 launch command that starts the simulation node
 # Equivalent to: ros2 launch <package> <launch_file> [extra_args...]
 rosbag_launch:
   package     : "common_meta"
-  launch_file : "rosbag_simulation_launch.py"
+  launch_file : "rosbag_simulation.py"
   extra_args  : []              # e.g. ["use_sim_time:=true"]
 
 # ros2 bag play command
@@ -54,15 +57,15 @@ checkers:
   - type: TopicAliveChecker
     topic: /perception/map2
     seconds: 0.5
- 
+
   - type: TopicAliveChecker
     topic: /slam/map2
     seconds: 20.0
- 
+
   - type: TopicAliveChecker
     topic: /path_planning/trajectory2
     seconds: 20.0
- 
+
   - type: PositionReceivedChecker
     topic: /car_state/state2
     max_jump: 1.0
