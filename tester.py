@@ -94,20 +94,19 @@ def get_rosbags(test_bags_dir: Path) -> list[Path]:
     return bags
 
 
-def write_report(bag_path: Path, failures_dir: Path, failures: list, logger: logging.Logger):
+# ──────────────────────────────────────────────
+#  Report writer
+# ──────────────────────────────────────────────
+def write_report(bag_path: Path, reports_dir: Path, failures: list[dict], logger: logging.Logger):
+    """
+    Escribe el reporte de fallos en reports/.
+    Nombre: report_<bag>_<fecha>_<hora>_at_<primer_elapsed>s.txt
+    failures: lista de dicts {"reason": str, "elapsed": float}
+    """
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-    # Normalizar — acepta tanto dicts {"reason":..., "elapsed":...} como strings
-    normalized = []
-    for f in failures:
-        if isinstance(f, dict):
-            normalized.append(f)
-        else:
-            normalized.append({"reason": str(f), "elapsed": 0.0})
-
-    first_elapsed = int(normalized[0]["elapsed"]) if normalized else 0
+    first_elapsed = int(failures[0]["elapsed"]) if failures else 0
     report_name = f"report_{bag_path.stem}_{timestamp}_at_{first_elapsed}s.txt"
-    report_path = failures_dir / report_name
+    report_path = reports_dir / report_name
 
     lines = [
         "=" * 60,
@@ -115,10 +114,10 @@ def write_report(bag_path: Path, failures_dir: Path, failures: list, logger: log
         "=" * 60,
         f"Timestamp  : {datetime.now().isoformat()}",
         f"Bag file   : {bag_path.name}",
-        f"Failures   : {len(normalized)}",
+        f"Failures   : {len(failures)}",
         "-" * 60,
     ]
-    for i, f in enumerate(normalized, 1):
+    for i, f in enumerate(failures, 1):
         elapsed_str = f"{f['elapsed']:.1f}s"
         lines.append(f"  [{i}] @ {elapsed_str} — {f['reason']}")
     lines.append("=" * 60)
@@ -126,6 +125,7 @@ def write_report(bag_path: Path, failures_dir: Path, failures: list, logger: log
     report_path.write_text("\n".join(lines) + "\n")
     logger.info(f"Report written → {report_path}")
     return report_path
+
 
 # ──────────────────────────────────────────────
 #  Move bag to failures
@@ -146,9 +146,20 @@ def move_to_failures(bag_path: Path, failures_dir: Path, logger: logging.Logger)
 # ──────────────────────────────────────────────
 #  Single bag simulation
 # ──────────────────────────────────────────────
-def run_bag(bag_path: Path, config: dict, logger: logging.Logger) -> tuple[bool, list[str]]:
+def run_bag(bag_path: Path, config: dict, dirs: dict, logger: logging.Logger) -> tuple[bool, list[dict]]:
     """
-    Simulate testing of a single rosbag.
+    Ejecuta el testeo de un rosbag:
+      1. ros2 launch  — arranca la simulación
+      2. ros2 bag play — reproduce el bag
+      3. ros2 bag record — graba la sesión en un directorio temporal
+      4. checkers — monitorizan en paralelo
+
+    Al terminar, los ficheros del recording se distribuyen SIEMPRE:
+      .mcap         → recordings/
+      metadata.yaml → metadata/
+
+    El bag original solo se mueve si hay fallos (lo gestiona main_loop):
+      original .mcap → failures/
 
     Returns (True, []) si no hay fallos,
             (False, [lista de fallos]) si algún checker detecta algo.
@@ -169,8 +180,20 @@ def run_bag(bag_path: Path, config: dict, logger: logging.Logger) -> tuple[bool,
         str(bag_path),
     ] + play_cfg.get("extra_args", [])
 
+    # Directorio temporal para la grabación
+    timestamp   = datetime.now().strftime("%Y%m%d_%H%M%S")
+    record_dir  = Path(f"/tmp/rosbag_record_{bag_path.stem}_{timestamp}")
+    # --storage mcap fuerza formato .mcap (el defecto de ROS2 es .db3)
+    record_cmd  = [
+        "ros2", "bag", "record",
+        "-o", str(record_dir),
+        "--storage", "mcap",
+        "-a",                      # graba todos los topics
+    ]
+
     logger.info(f"  Launch cmd : {' '.join(launch_cmd)}")
     logger.info(f"  Play cmd   : {' '.join(play_cmd)}")
+    logger.info(f"  Record cmd : {' '.join(record_cmd)}")
 
     # ── Instanciar checkers ────────────────────────────────────
     checkers = build_checkers(checker_cfgs, logger)
@@ -178,16 +201,71 @@ def run_bag(bag_path: Path, config: dict, logger: logging.Logger) -> tuple[bool,
 
     proc_launch = None
     proc_play   = None
+    proc_record = None
 
-    def collect_failures() -> list[str]:
+    def collect_failures() -> list[dict]:
         all_failures = []
         for checker in checkers:
             checker.stop()
             all_failures.extend(checker.failures())
         return all_failures
 
+    def stop_process(proc, name: str):
+        """Para un proceso con SIGINT y espera, kill si no responde."""
+        if proc and proc.poll() is None:
+            logger.debug(f"  Terminating {name} process (PID {proc.pid})")
+            proc.send_signal(signal.SIGINT)
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+
+    # Extensiones de bag que ROS2 puede generar
+    BAG_EXTENSIONS = {".mcap", ".db3"}
+
+    def handle_recording():
+        """
+        Tras el testeo, los ficheros del recording se distribuyen SIEMPRE:
+          fichero de bag (.mcap / .db3) → recordings/
+          metadata.yaml                 → metadata/
+
+        El resultado (PASS/FAIL) no afecta aquí; solo condiciona si el bag
+        original se mueve a failures/ (eso lo decide main_loop).
+        """
+        if not record_dir.exists():
+            logger.warning("  Recording dir no encontrado — no se grabó nada.")
+            return
+
+        _recordings_dir = dirs["recordings"]
+        _metadata_dir   = dirs["metadata"]
+
+        # Log de diagnóstico: qué hay realmente en el directorio
+        contents = list(record_dir.iterdir())
+        logger.debug(f"  Record dir contents ({len(contents)} items): "
+                     f"{[f.name for f in contents]}")
+
+        moved = 0
+        for f in contents:
+            if f.suffix in BAG_EXTENSIONS:
+                dest = _recordings_dir / f"{bag_path.stem}_{timestamp}{f.suffix}"
+                shutil.move(str(f), str(dest))
+                logger.info(f"  Recording {f.suffix} → {dest}")
+                moved += 1
+            elif f.name == "metadata.yaml":
+                dest = _metadata_dir / f"metadata_{bag_path.stem}_{timestamp}.yaml"
+                shutil.move(str(f), str(dest))
+                logger.info(f"  Metadata          → {dest}")
+                moved += 1
+            else:
+                logger.debug(f"  Ignorado: {f.name}")
+
+        if moved == 0:
+            logger.warning("  Recording dir existe pero no contiene ficheros de bag reconocidos.")
+
+        shutil.rmtree(str(record_dir), ignore_errors=True)
+
     try:
-        # ── Start simulation node ──────────────────────────────
+        # ── 1. Arrancar simulación ─────────────────────────────
         proc_launch = subprocess.Popen(
             launch_cmd,
             stdout=subprocess.PIPE,
@@ -197,7 +275,7 @@ def run_bag(bag_path: Path, config: dict, logger: logging.Logger) -> tuple[bool,
 
         time.sleep(test_cfg.get("launch_settle_seconds", 2.0))
 
-        # ── Start bag playback ─────────────────────────────────
+        # ── 2. Arrancar reproducción ───────────────────────────
         proc_play = subprocess.Popen(
             play_cmd,
             stdout=subprocess.PIPE,
@@ -205,50 +283,65 @@ def run_bag(bag_path: Path, config: dict, logger: logging.Logger) -> tuple[bool,
         )
         logger.debug(f"  Play PID   : {proc_play.pid}")
 
-        # ── Arrancar checkers DESPUÉS del play ─────────────────
-        # Los topics ya están publicándose en el grafo ROS2
-        # en este punto, así que el discovery funciona correctamente
+        # ── 3. Arrancar grabación ──────────────────────────────
+        proc_record = subprocess.Popen(
+            record_cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        logger.debug(f"  Record PID : {proc_record.pid}")
+
+        # ── 4. Arrancar checkers ───────────────────────────────
         for checker in checkers:
             checker.start()
 
-        # ── Wait for playback to finish ────────────────────────
+        # ── 5. Esperar a que termine la reproducción ───────────
         timeout = test_cfg.get("play_timeout_seconds", None)
         proc_play.wait(timeout=timeout)
         logger.debug(f"  Play finished with returncode={proc_play.returncode}")
 
+        # ── 6. Parar grabación y esperar a que ROS2 finalice el .mcap ──
+        stop_process(proc_record, "record")
+        time.sleep(test_cfg.get("record_settle_seconds", 1.0))
+
+        # ── 7. Recoger fallos ──────────────────────────────────
         failures = collect_failures()
-        return (len(failures) == 0, failures)
+        success  = len(failures) == 0
+
+        # ── 8. Distribuir recording (siempre) ─────────────────
+        handle_recording()
+        return (success, failures)
 
     except subprocess.TimeoutExpired:
         logger.error("  Playback exceeded timeout — treating as failure.")
+        stop_process(proc_record, "record")
+        time.sleep(test_cfg.get("record_settle_seconds", 1.0))
         failures = collect_failures()
-        failures.insert(0, "Playback exceeded configured timeout.")
+        failures.insert(0, {"reason": "Playback exceeded configured timeout.", "elapsed": 0.0})
+        handle_recording()
         return (False, failures)
 
     except FileNotFoundError as exc:
         logger.warning(f"  ROS2 binary not found ({exc}). Simulating dry-run.")
         time.sleep(test_cfg.get("dry_run_sleep_seconds", 1.0))
         failures = collect_failures()
+        handle_recording()
         return (len(failures) == 0, failures)
 
     finally:
-        for proc, name in [(proc_play, "play"), (proc_launch, "launch")]:
-            if proc and proc.poll() is None:
-                logger.debug(f"  Terminating {name} process (PID {proc.pid})")
-                proc.send_signal(signal.SIGINT)
-                try:
-                    proc.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
+        stop_process(proc_record, "record")
+        stop_process(proc_play,   "play")
+        stop_process(proc_launch, "launch")
 
 
 # ──────────────────────────────────────────────
 #  Main loop
 # ──────────────────────────────────────────────
 def main_loop(config: dict, dirs: dict, logger: logging.Logger):
-    test_bags_dir = dirs["test_bags"]
-    failures_dir  = dirs["failures"]
-    cycle         = 0
+    test_bags_dir  = dirs["test_bags"]
+    failures_dir   = dirs["failures"]
+    reports_dir    = dirs["reports"]
+    cycle          = 0
 
     logger.info("=" * 60)
     logger.info("  ROSBAG AUTOMATION TESTING — starting infinite loop")
@@ -270,7 +363,7 @@ def main_loop(config: dict, dirs: dict, logger: logging.Logger):
             for bag_path in bags:
                 logger.info(f"  ▶ Processing: {bag_path.name}")
 
-                success, failures = run_bag(bag_path, config, logger)
+                success, failures = run_bag(bag_path, config, dirs, logger)
 
                 if success:
                     logger.info(f"  ✔ PASSED — {bag_path.name}")
@@ -278,7 +371,7 @@ def main_loop(config: dict, dirs: dict, logger: logging.Logger):
                     logger.warning(f"  ✖ FAILED  — {bag_path.name}")
                     write_report(
                         bag_path=bag_path,
-                        failures_dir=failures_dir,
+                        reports_dir=reports_dir,
                         failures=failures,
                         logger=logger,
                     )
