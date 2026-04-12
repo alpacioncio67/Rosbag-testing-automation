@@ -1,74 +1,74 @@
 # Rosbag Automation Testing
 
-Sistema automático de testeo de rosbags desarrollado en Python sobre ROS2 Humble.
+Automatic rosbag testing system built in Python on top of ROS2 Humble.
 
 ---
 
-## Estructura del proyecto
+## Project Structure
 
 ```
 rosbag_automation/
-├── tester.py                        # Punto de entrada, bucle principal
-├── config.yaml                      # Configuración del sistema
+├── tester.py                        # Entry point, main loop
+├── config.yaml                      # System configuration
 │
-├── checkers/                        # Módulo de monitorización
+├── checkers/                        # Monitoring module
 │   ├── __init__.py                  # Registry + build_checkers()
-│   ├── base_checker.py              # Clase abstracta base
-│   ├── always_pass_checker.py       # Checker de prueba (siempre pasa)
-│   ├── always_fail_checker.py       # Checker de prueba (siempre falla)
-│   ├── topic_alive_checker.py       # Comprueba que un topic reciba mensajes cada N segundos
-│   └── position_received_checker.py # Comprueba que el SLAM no dé botes
+│   ├── base_checker.py              # Abstract base class
+│   ├── always_pass_checker.py       # Test checker (always passes)
+│   ├── always_fail_checker.py       # Test checker (always fails)
+│   ├── topic_alive_checker.py       # Checks that a topic receives messages every N seconds
+│   └── position_received_checker.py # Checks that SLAM does not produce position jumps
 │
-├── test_bags/                       # Rosbags pendientes de testear (.mcap)
-├── failures/                        # Bags fallidos + reportes generados
-└── logs/                            # Logs del tester con timestamp
+├── test_bags/                       # Rosbags pending testing (.mcap)
+├── failures/                        # Failed bags + generated reports
+└── logs/                            # Tester logs with timestamp
 ```
 
 ---
 
-## Despliegue
+## Deployment
 
-### Requisitos previos
+### Prerequisites
 
-- **ROS2 Humble** instalado y con el entorno cargado:
+- **ROS2 Humble** installed with the environment sourced:
   ```bash
   source /opt/ros/humble/setup.bash
-  source ~/ws/install/setup.bash   # tu workspace
+  source ~/ws/install/setup.bash   # your workspace
   ```
 
-- **Python 3.10+** (incluido con ROS2 Humble)
+- **Python 3.10+** (included with ROS2 Humble)
 
-- **Dependencias Python:**
+- **Python dependencies:**
   ```bash
   pip install pyyaml
   ```
-  El resto de dependencias (`rclpy`, `rclpy.executors`, etc.) vienen incluidas con ROS2.
+  The remaining dependencies (`rclpy`, `rclpy.executors`, etc.) are bundled with ROS2.
 
-- **Paquete ROS2 de mensajes** de tu sistema (`common_msgs` o el que uses) compilado en el workspace.
+- **ROS2 message package** for your system (`common_msgs` or whichever you use) compiled in your workspace.
 
-### Instalación
+### Installation
 
 ```bash
-# 1. Clona o copia el proyecto en tu workspace
+# 1. Clone or copy the project into your workspace
 cd ~/ws
 git clone <repo> rosbag_automation
 cd rosbag_automation
 
-# 2. Crea los directorios necesarios (se crean solos al arrancar, pero por si acaso)
+# 2. Create the required directories (auto-created on startup, but just in case)
 mkdir -p test_bags failures logs
 
-# 3. Ajusta el config
+# 3. Edit the config
 nano config.yaml
 ```
 
-### Configuración mínima
+### Minimal Configuration
 
-Edita `config.yaml` antes de arrancar. Las secciones críticas son:
+Edit `config.yaml` before starting. The critical sections are:
 
 ```yaml
 rosbag_launch:
-  package     : "common_meta"           # tu paquete ROS2
-  launch_file : "rosbag_simulation.py"  # tu launch file
+  package     : "common_meta"           # your ROS2 package
+  launch_file : "rosbag_simulation.py"  # your launch file
 
 checkers:
   - type: TopicAliveChecker
@@ -76,86 +76,86 @@ checkers:
     seconds: 0.5
 ```
 
-### Ejecución
+### Running
 
 ```bash
-# Coloca los .mcap en test_bags/
-cp mis_bags/*.mcap test_bags/
+# Place your .mcap files in test_bags/
+cp my_bags/*.mcap test_bags/
 
-# Arranca el tester
+# Start the tester
 python3 tester.py
 
-# Con config alternativa
-python3 tester.py --config /ruta/a/otro_config.yaml
+# With an alternative config
+python3 tester.py --config /path/to/other_config.yaml
 ```
 
-El tester corre en bucle infinito. Para pararlo: `Ctrl+C`.
+The tester runs in an infinite loop. To stop it: `Ctrl+C`.
 
 ---
 
-## Cómo funciona
+## How It Works
 
 ```
-bucle infinito
+infinite loop
 │
-├── escanea test_bags/ buscando .mcap
+├── scans test_bags/ for .mcap files
 │
-└── por cada bag:
-        ├── ros2 launch <simulación>
+└── for each bag:
+        ├── ros2 launch <simulation>
         ├── ros2 bag play <bag.mcap>
-        ├── checkers corriendo en paralelo (hilos)
+        ├── checkers running in parallel (threads)
         │
-        ├── bag termina → stop() en cada checker
+        ├── bag ends → stop() on each checker
         │
-        ├── PASS → siguiente bag
-        └── FAIL → report_<bag>_<fecha>_at_<segundo>s.txt
-                   bag movido a failures/
+        ├── PASS → next bag
+        └── FAIL → report_<bag>_<date>_at_<second>s.txt
+                   bag moved to failures/
 ```
 
 ---
 
-## Añadir un checker propio
+## Adding a Custom Checker
 
-### 1. La herencia
+### 1. Inheritance
 
-Todos los checkers heredan de `BaseChecker`. La clase base proporciona:
+All checkers inherit from `BaseChecker`. The base class provides:
 
-| Método/atributo | Qué hace |
+| Method / attribute | What it does |
 |---|---|
-| `start()` | Arranca el checker, inicializa el reloj interno, llama a `_on_start()` |
-| `stop()` | Para el checker, llama a `_on_stop()` |
-| `failures()` | Devuelve la lista de fallos como `[{"reason": str, "elapsed": float}]` |
-| `_record_failure(reason)` | Registra un fallo con el segundo exacto en que ocurrió |
-| `_running` | `True` mientras el checker está activo, `False` tras `stop()` |
-| `_start_time` | Timestamp de cuando arrancó, para calcular el elapsed |
-| `self.logger` | Logger configurado automáticamente con el nombre del checker |
+| `start()` | Starts the checker, initialises the internal clock, calls `_on_start()` |
+| `stop()` | Stops the checker, calls `_on_stop()` |
+| `failures()` | Returns the list of failures as `[{"reason": str, "elapsed": float}]` |
+| `_record_failure(reason)` | Records a failure with the exact second it occurred |
+| `_running` | `True` while the checker is active, `False` after `stop()` |
+| `_start_time` | Timestamp of when the checker started, used to compute elapsed time |
+| `self.logger` | Logger automatically configured with the checker's name |
 
-Tú solo tienes que implementar **dos métodos**:
+You only need to implement **two methods**:
 
 ```
-_on_start()  →  qué hace tu checker al arrancar
-_on_stop()   →  qué hace al parar + comprobaciones finales
+_on_start()  →  what your checker does when it starts
+_on_stop()   →  what it does when it stops + final checks
 ```
 
-Y llamar a `_record_failure("descripción")` cuando detectes algo malo.
+And call `_record_failure("description")` whenever something bad is detected.
 
 ---
 
-### 2. Molde
+### 2. Template
 
-Copia esto en `checkers/mi_checker.py` y rellena los huecos:
+Copy this into `checkers/my_checker.py` and fill in the blanks:
 
 ```python
 """
-checkers/mi_checker.py
+checkers/my_checker.py
 
-Descripción de qué comprueba este checker.
+Description of what this checker verifies.
 
-Uso en config.yaml:
+Usage in config.yaml:
     checkers:
-      - type: MiChecker
-        topic: /mi/topic
-        mi_parametro: 42.0
+      - type: MyChecker
+        topic: /my/topic
+        my_parameter: 42.0
 """
 
 import time
@@ -172,30 +172,30 @@ _TOPIC_DISCOVERY_TIMEOUT  = 30.0
 _TOPIC_DISCOVERY_INTERVAL = 0.2
 
 
-class MiChecker(BaseChecker):
+class MyChecker(BaseChecker):
 
-    def __init__(self, topic: str, mi_parametro: float, logger=None):
-        super().__init__(name=f"MiChecker({topic})", logger=logger)
+    def __init__(self, topic: str, my_parameter: float, logger=None):
+        super().__init__(name=f"MyChecker({topic})", logger=logger)
 
-        self.topic         = topic
-        self.mi_parametro  = mi_parametro
+        self.topic        = topic
+        self.my_parameter = my_parameter
 
-        # Estado interno
-        self._received     = False
-        self._context      = None
-        self._node         = None
-        self._executor     = None
-        self._spin_thread  = None
+        # Internal state
+        self._received    = False
+        self._context     = None
+        self._node        = None
+        self._executor    = None
+        self._spin_thread = None
         self._setup_thread = None
 
-    # ── Arranque ───────────────────────────────────────────────────────────
+    # ── Startup ────────────────────────────────────────────────────────────
 
     def _on_start(self):
-        # Contexto propio → aislado del resto de checkers y bags
+        # Own context → isolated from other checkers and bags
         self._context = rclpy.context.Context()
         rclpy.init(context=self._context)
 
-        node_name = "mi_checker_" + self.topic.replace("/", "_").strip("_")
+        node_name = "my_checker_" + self.topic.replace("/", "_").strip("_")
         self._node = Node(node_name, context=self._context)
 
         self._executor = rclpy.executors.SingleThreadedExecutor(
@@ -215,9 +215,9 @@ class MiChecker(BaseChecker):
         )
         self._setup_thread.start()
 
-        self.logger.info(f"[{self.name}] iniciado")
+        self.logger.info(f"[{self.name}] started")
 
-    # ── Discovery (no tocar, igual en todos los checkers) ─────────────────
+    # ── Discovery (do not modify, same across all checkers) ───────────────
 
     def _discover_and_subscribe(self):
         import importlib
@@ -236,12 +236,12 @@ class MiChecker(BaseChecker):
                 module   = importlib.import_module(f"{parts[0]}.msg")
                 msg_cls  = getattr(module, parts[2])
                 self._node.create_subscription(msg_cls, self.topic, self._callback, 10)
-                self.logger.info(f"[{self.name}] suscrito a '{self.topic}'")
+                self.logger.info(f"[{self.name}] subscribed to '{self.topic}'")
                 return
             time.sleep(_TOPIC_DISCOVERY_INTERVAL)
 
         self._record_failure(
-            f"Topic '{self.topic}' no apareció en {_TOPIC_DISCOVERY_TIMEOUT}s."
+            f"Topic '{self.topic}' did not appear within {_TOPIC_DISCOVERY_TIMEOUT}s."
         )
 
     def _spin_safely(self):
@@ -250,33 +250,33 @@ class MiChecker(BaseChecker):
         except Exception:
             pass
 
-    # ── Callback — AQUÍ va tu lógica ──────────────────────────────────────
+    # ── Callback — YOUR logic goes here ───────────────────────────────────
 
     def _callback(self, msg):
         if not self._received:
             self._received = True
 
-        # Ejemplo: accede a los campos del mensaje y comprueba lo que necesites
-        # Si algo está mal → llama a _record_failure()
+        # Example: access message fields and check whatever you need.
+        # If something is wrong → call _record_failure()
         #
-        # valor = msg.mi_campo
-        # if valor > self.mi_parametro:
-        #     self._record_failure(f"Valor {valor} supera el límite {self.mi_parametro}")
+        # value = msg.my_field
+        # if value > self.my_parameter:
+        #     self._record_failure(f"Value {value} exceeds limit {self.my_parameter}")
 
-    # ── Parada — comprobaciones finales ───────────────────────────────────
+    # ── Shutdown — final checks ────────────────────────────────────────────
 
     def _on_stop(self):
         if self._setup_thread and self._setup_thread.is_alive():
             self._setup_thread.join(timeout=2.0)
 
-        # Comprobar si nunca llegó ningún mensaje
+        # Check whether any message was ever received
         if not self._received and not self._failures:
             self._record_failure(
-                f"Topic '{self.topic}': no se recibió ningún mensaje durante el bag."
+                f"Topic '{self.topic}': no messages received during the bag."
             )
 
-        # Aquí también puedes hacer comprobaciones sobre el estado acumulado
-        # durante todo el bag, no solo por mensaje individual.
+        # You can also perform checks on state accumulated across the entire
+        # bag run here, not just per individual message.
 
         if self._executor:
             self._executor.shutdown(timeout_sec=2.0)
@@ -293,49 +293,49 @@ class MiChecker(BaseChecker):
 
 ---
 
-### 3. Registrarlo en `__init__.py`
+### 3. Registering it in `__init__.py`
 
-Abre `checkers/__init__.py` y añade dos líneas:
+Open `checkers/__init__.py` and add two lines:
 
 ```python
-# 1. Importa la clase
-from .mi_checker import MiChecker
+# 1. Import the class
+from .my_checker import MyChecker
 
-# 2. Añádela al registry
+# 2. Add it to the registry
 REGISTRY: dict[str, type[BaseChecker]] = {
     "AlwaysPassChecker"       : AlwaysPassChecker,
     "AlwaysFailChecker"       : AlwaysFailChecker,
     "TopicAliveChecker"       : TopicAliveChecker,
     "PositionReceivedChecker" : PositionReceivedChecker,
-    "MiChecker"               : MiChecker,          # ← nueva línea
+    "MyChecker"               : MyChecker,          # ← new line
 }
 ```
 
-### 4. Configurarlo en `config.yaml`
+### 4. Configuring it in `config.yaml`
 
 ```yaml
 checkers:
-  - type: MiChecker
-    topic: /mi/topic
-    mi_parametro: 42.0
+  - type: MyChecker
+    topic: /my/topic
+    my_parameter: 42.0
 ```
 
-Los parámetros del yaml (excepto `type`) se pasan automáticamente como `kwargs` al constructor. El nombre del parámetro en el yaml debe coincidir exactamente con el nombre del argumento en `__init__`.
+The yaml parameters (except `type`) are automatically passed as `kwargs` to the constructor. The parameter name in the yaml must match the argument name in `__init__` exactly.
 
 ---
 
-## Reporte de fallos
+## Failure Reports
 
-Cuando un checker detecta un fallo, se genera automáticamente un fichero en `failures/`:
+When a checker detects a failure, a file is automatically generated in `failures/`:
 
 ```
 report_con_paralelizar_20260406_183012_at_47s.txt
               │                  │          │
-           nombre del bag    fecha+hora  segundo del bag
-                                         en que falló
+           bag name          date+time   second of the bag
+                                          when it failed
 ```
 
-Contenido del reporte:
+Report contents:
 ```
 ============================================================
 ROSBAG AUTOMATION TESTING — FAILURE REPORT
@@ -344,7 +344,57 @@ Timestamp  : 2026-04-06T18:30:12
 Bag file   : con_paralelizar.mcap
 Failures   : 2
 ------------------------------------------------------------
-  [1] @ 12.3s — Topic '/slam/map2': sin mensajes durante 21.4s
-  [2] @ 47.1s — SLAM bote detectado: salto de 3.2m
+  [1] @ 12.3s — Topic '/slam/map2': no messages for 21.4s
+  [2] @ 47.1s — SLAM jump detected: position leap of 3.2m
 ============================================================
 ```
+
+---
+
+## 2.3 Uploading Data to Foxglove
+
+We will not upload the original rosbags to Foxglove as received. Instead, we record a new bag on top of the simulation using `ros2 bag record`, and that recording is what gets uploaded.
+
+### Execution Model
+
+A new thread is added to the main program alongside the existing ones:
+
+| Thread | Role |
+|---|---|
+| `ros2 launch common_meta rosbag_simulation_launch.py` | Starts the simulation |
+| `ros2 bag play` | Replays the original bag |
+| `ros2 bag record` | Records everything happening in parallel |
+| Checker threads | Monitor topics in parallel |
+
+### Flow
+
+```
+ros2 launch      →  starts the simulation
+sleep 2s
+ros2 bag play    →  replays the original bag
+ros2 bag record  →  records all topics in parallel (--storage mcap)
+checkers         →  monitor in parallel
+
+bag play finishes
+    │
+    ├── SIGINT → record     ← stops the recording cleanly
+    ├── stop() checkers
+    │
+    ├── PASS → shutil.rmtree(/tmp/rosbag_record_...)   ← recording discarded
+    └── FAIL → shutil.move  → failures/recordings/recorded_<bag>_<timestamp>.mcap
+                            → failures/metadata/metadata_<bag>_<timestamp>.yaml
+                            → failures/reports/report_<bag>_<timestamp>.txt
+                            → failures/<original_bag>.mcap
+```
+
+### `failures/` Directory Structure
+
+```
+failures/
+  ├── recordings/    ← new recorded bags (only from failed runs)
+  ├── metadata/      ← metadata.yaml from each failed recording
+  ├── reports/       ← failure reports generated by checkers
+  └── <original_bag>.mcap   ← original bags that failed
+```
+
+> The recording is only kept when the run fails. If the bag passes all checks, the temporary recording is deleted and nothing is stored.
