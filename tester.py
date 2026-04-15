@@ -97,14 +97,20 @@ def get_rosbags(test_bags_dir: Path) -> list[Path]:
 # ──────────────────────────────────────────────
 #  Report writer
 # ──────────────────────────────────────────────
-def write_report(bag_path: Path, reports_dir: Path, failures: list[dict], logger: logging.Logger):
+def write_report(bag_path: Path, reports_dir: Path, failures: list, logger: logging.Logger):
     """
     Escribe el reporte de fallos en reports/.
     Nombre: report_<bag>_<fecha>_<hora>_at_<primer_elapsed>s.txt
-    failures: lista de dicts {"reason": str, "elapsed": float}
+    failures: lista de dicts {"reason": str, "elapsed": float} o lista de strings
     """
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    first_elapsed = int(failures[0]["elapsed"]) if failures else 0
+    
+    # Safely extract the elapsed time of the first failure
+    first_elapsed = 0
+    if failures:
+        if isinstance(failures[0], dict) and "elapsed" in failures[0]:
+            first_elapsed = int(failures[0]["elapsed"])
+
     report_name = f"report_{bag_path.stem}_{timestamp}_at_{first_elapsed}s.txt"
     report_path = reports_dir / report_name
 
@@ -117,9 +123,18 @@ def write_report(bag_path: Path, reports_dir: Path, failures: list[dict], logger
         f"Failures   : {len(failures)}",
         "-" * 60,
     ]
+    
     for i, f in enumerate(failures, 1):
-        elapsed_str = f"{f['elapsed']:.1f}s"
-        lines.append(f"  [{i}] @ {elapsed_str} — {f['reason']}")
+        # Handle both dictionary and string formats safely
+        if isinstance(f, dict):
+            elapsed_str = f"{f.get('elapsed', 0.0):.1f}s"
+            reason = f.get("reason", "Unknown error")
+        else:
+            elapsed_str = "??.?s"
+            reason = str(f)
+            
+        lines.append(f"  [{i}] @ {elapsed_str} — {reason}")
+        
     lines.append("=" * 60)
 
     report_path.write_text("\n".join(lines) + "\n")
