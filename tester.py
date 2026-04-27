@@ -221,7 +221,9 @@ def run_bag(bag_path: Path, config: dict, dirs: dict, logger: logging.Logger) ->
     def collect_failures() -> list[dict]:
         all_failures = []
         for checker in checkers:
-            checker.stop()
+            # Comprobar de forma segura si el método stop existe
+            if hasattr(checker, "stop"):
+                checker.stop()
             all_failures.extend(checker.failures())
         return all_failures
 
@@ -310,16 +312,34 @@ def run_bag(bag_path: Path, config: dict, dirs: dict, logger: logging.Logger) ->
         for checker in checkers:
             checker.start()
 
-        # ── 5. Esperar a que termine la reproducción ───────────
+        # ── 5. Monitorizar checkers y reproducción ────────────
         timeout = test_cfg.get("play_timeout_seconds", None)
-        proc_play.wait(timeout=timeout)
-        logger.debug(f"  Play finished with returncode={proc_play.returncode}")
+        poll_interval = 0.2
+        elapsed = 0.0
+        failures = []
+        while True:
+            if proc_play.poll() is not None:
+                break
+            # Consultar fallos de los checkers en cada ciclo
+            failures = []
+            for checker in checkers:
+                failures.extend(checker.failures())
+            if failures:
+                logger.warning("  Checker failure detected — stopping simulation early.")
+                break
+            time.sleep(poll_interval)
+            elapsed += poll_interval
+            if timeout and elapsed >= timeout:
+                logger.error("  Playback exceeded timeout — treating as failure.")
+                break
 
-        # ── 6. Parar grabación y esperar a que ROS2 finalice el .mcap ──
+        # Parar procesos si no han terminado
         stop_process(proc_record, "record")
+        stop_process(proc_play,   "play")
+        stop_process(proc_launch, "launch")
         time.sleep(test_cfg.get("record_settle_seconds", 1.0))
 
-        # ── 7. Recoger fallos ──────────────────────────────────
+        # Recoger fallos definitivos
         failures = collect_failures()
         success  = len(failures) == 0
 
@@ -347,6 +367,11 @@ def run_bag(bag_path: Path, config: dict, dirs: dict, logger: logging.Logger) ->
         stop_process(proc_record, "record")
         stop_process(proc_play,   "play")
         stop_process(proc_launch, "launch")
+        
+        # NUEVO: Detener explícitamente los checkers si el usuario hace Ctrl+C
+        for checker in checkers:
+            if hasattr(checker, "stop"):
+                checker.stop()
 
 
 # ──────────────────────────────────────────────
@@ -390,7 +415,7 @@ def main_loop(config: dict, dirs: dict, logger: logging.Logger):
                         failures=failures,
                         logger=logger,
                     )
-                    move_to_failures(bag_path, failures_dir, logger)
+                    # Ya no se mueve el rosbag original a failures
 
             logger.info(f"[Cycle {cycle}] All bags processed. Restarting cycle...\n")
 
