@@ -15,7 +15,7 @@ directories:
 # Equivalent to: ros2 launch <package> <launch_file> [extra_args...]
 rosbag_launch:
   package     : "common_meta"
-  launch_file : "rosbag_simulation.py"
+  launch_file : "rosbag_simulation_launch.py"
   extra_args  : []              # e.g. ["use_sim_time:=true"]
 
 # ros2 bag play command
