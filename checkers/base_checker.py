@@ -1,60 +1,51 @@
-"""
-checkers/base_checker.py
-
-Contrato que deben cumplir todos los checkers.
-Cada checker concreto hereda de esta clase e implementa:
-  - _on_start()  → lógica de arranque  (suscripción al topic, etc.)
-  - _on_stop()   → lógica de parada    (desuscripción, parar hilo, etc.)
-  - _check()     → lógica de comprobación (llamada desde el callback ROS2
-                   o, en checkers síncronos, desde stop())
-"""
-
-from abc import ABC, abstractmethod
+import time
 import logging
-
+from abc import ABC, abstractmethod
 
 class BaseChecker(ABC):
 
     def __init__(self, name: str, logger: logging.Logger | None = None):
-        self.name     = name
-        self.logger   = logger or logging.getLogger(f"checker.{name}")
-        self._running  = False
-        self._failures: list[str] = []
-
-    # ── Interfaz pública ───────────────────────────────────────────────────
+        self.name        = name
+        self.logger      = logger or logging.getLogger(f"checker.{name}")
+        self._running    = False
+        self._start_time: float | None = None
+        self._failures: list[dict] = []
 
     def start(self):
-        """Arranca el checker. Llamado justo antes de iniciar el bag play."""
-        self._failures = []
-        self._running  = True
+        """Arranca el checker."""
+        self._failures   = []
+        self._running    = True
+        self._start_time = time.time()
         self.logger.debug(f"[{self.name}] started")
         self._on_start()
 
     def stop(self):
-        """Para el checker. Llamado justo después de que el bag termine."""
+        """
+        ESTE ES EL MÉTODO QUE BUSCA EL TESTER.
+        Activa el flag de parada y ejecuta la limpieza específica.
+        """
+        if not self._running:
+            return
+            
         self._running = False
+        self.logger.debug(f"[{self.name}] stopping...")
         self._on_stop()
-        self.logger.debug(f"[{self.name}] stopped — {len(self._failures)} failure(s)")
 
-    def failures(self) -> list[str]:
-        """Devuelve la lista de fallos detectados (vacía = sin fallos)."""
+    def failures(self) -> list[dict]:
         return list(self._failures)
 
-    # ── Helpers para subclases ─────────────────────────────────────────────
-
     def _record_failure(self, reason: str):
-        """Registra un fallo. Las subclases llaman a esto cuando detectan algo."""
-        self._failures.append(reason)
-        self.logger.warning(f"[{self.name}] FAILURE: {reason}")
-
-    # ── Métodos que las subclases deben/pueden implementar ─────────────────
+        elapsed = time.time() - self._start_time if self._start_time else 0.0
+        entry = {"reason": reason, "elapsed": elapsed}
+        self._failures.append(entry)
+        self.logger.warning(f"[{self.name}] FAILURE at {elapsed:.1f}s: {reason}")
 
     @abstractmethod
     def _on_start(self):
-        """Lógica específica de arranque (suscribirse a topic, etc.)."""
-        ...
+        """Implementado por la subclase."""
+        pass
 
     @abstractmethod
     def _on_stop(self):
-        """Lógica específica de parada (desuscribirse, join de hilo, etc.)."""
-        ...
+        """Implementado por la subclase."""
+        pass
