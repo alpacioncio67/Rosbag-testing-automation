@@ -378,10 +378,14 @@ def run_bag(bag_path: Path, config: dict, dirs: dict, logger: logging.Logger) ->
 #  Main loop
 # ──────────────────────────────────────────────
 def main_loop(config: dict, dirs: dict, logger: logging.Logger):
+
     test_bags_dir  = dirs["test_bags"]
     failures_dir   = dirs["failures"]
     reports_dir    = dirs["reports"]
     cycle          = 0
+
+    # Permitir configurar el número de iteraciones por rosbag
+    iteraciones_por_bag = config["testing"].get("iteraciones_por_bag", 1)
 
     logger.info("=" * 60)
     logger.info("  ROSBAG AUTOMATION TESTING — starting infinite loop")
@@ -400,22 +404,30 @@ def main_loop(config: dict, dirs: dict, logger: logging.Logger):
 
             logger.info(f"[Cycle {cycle}] Found {len(bags)} bag(s) to process.")
 
+
             for bag_path in bags:
-                logger.info(f"  ▶ Processing: {bag_path.name}")
+                algun_fallo = False
+                todas_las_fallos = []
+                for iteracion in range(1, iteraciones_por_bag + 1):
+                    logger.info(f"  ▶ Processing: {bag_path.name} (Iteración {iteracion}/{iteraciones_por_bag})")
+                    success, failures = run_bag(bag_path, config, dirs, logger)
+                    if success:
+                        logger.info(f"  ✔ PASSED — {bag_path.name} (Iteración {iteracion})")
+                    else:
+                        logger.warning(f"  ✖ FAILED  — {bag_path.name} (Iteración {iteracion})")
+                        algun_fallo = True
+                        # Guardar los fallos de todas las iteraciones
+                        todas_las_fallos.extend(failures)
 
-                success, failures = run_bag(bag_path, config, dirs, logger)
-
-                if success:
-                    logger.info(f"  ✔ PASSED — {bag_path.name}")
-                else:
-                    logger.warning(f"  ✖ FAILED  — {bag_path.name}")
+                # Al terminar todas las iteraciones:
+                if algun_fallo:
                     write_report(
                         bag_path=bag_path,
                         reports_dir=reports_dir,
-                        failures=failures,
+                        failures=todas_las_fallos,
                         logger=logger,
                     )
-                    # Ya no se mueve el rosbag original a failures
+                    move_to_failures(bag_path, failures_dir, logger)
 
             logger.info(f"[Cycle {cycle}] All bags processed. Restarting cycle...\n")
 
