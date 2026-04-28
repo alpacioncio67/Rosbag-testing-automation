@@ -25,6 +25,8 @@ rosbag_play:
 
 # Testing behaviour
 testing:
+  # Número de veces que se ejecuta cada rosbag antes de pasar al siguiente
+  iteraciones_por_bag: 2
   # Seconds to wait after launching the simulation before starting playback
   launch_settle_seconds   : 2.0
 
