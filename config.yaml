@@ -71,3 +71,8 @@ checkers:
   - type: PositionReceivedChecker
     topic: /car_state/state2
     max_jump: 1.0
+
+  #- type: PlanningChecker
+  #  planning_topic: /path_planning/trajectory2
+  #  lap_topic: /car_state/car_info.lap_count
+  #  threshold: 3.0
