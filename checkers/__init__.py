@@ -14,6 +14,7 @@ from .always_pass_checker   import AlwaysPassChecker
 from .always_fail_checker   import AlwaysFailChecker
 from .topic_alive_checker        import TopicAliveChecker
 from .slam_jump_checker  import PositionReceivedChecker
+from .PlanningChecker import PlanningFirstLapChecker
 
 # ── Registry nombre → clase ────────────────────────────────────────────────
 # El tester usa este dict para instanciar checkers desde config.yaml
@@ -22,6 +23,7 @@ REGISTRY: dict[str, type[BaseChecker]] = {
     "AlwaysFailChecker" : AlwaysFailChecker,
     "TopicAliveChecker"        : TopicAliveChecker,
     "PositionReceivedChecker"  : PositionReceivedChecker,
+    "PlanningChecker" : PlanningFirstLapChecker
 }
 
 
